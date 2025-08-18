@@ -48,6 +48,12 @@
 #include "generated/color_vert.h"
 #include "generated/color_frag.h"
 
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+#include <sstream>
+#include <iomanip>
+
 // workaround for Windows OS.
 #undef CreateWindow
 
@@ -103,6 +109,33 @@ std::vector<Resolution> preset_resolutions = {
     {2560, 1440, "2560 x 1440 (1440p, QHD)"},
     // clang-format on
 };
+
+// saving screenshots for testing
+bool SaveImageToFile(const std::string& filename, const void* data, 
+                    uint32_t width, uint32_t height, VkFormat format) {
+    // Convert filename to .png
+    std::string png_filename = filename;
+    if (png_filename.find_last_of('.') == std::string::npos) {
+        png_filename += ".png";
+    } else {
+        png_filename = png_filename.substr(0, png_filename.find_last_of('.')) + ".png";
+    }
+
+    // For Vulkan's B8G8R8A8 format, we need to swap channels for RGB
+    std::vector<uint8_t> rgb_data(width * height * 3);
+    const uint8_t* src = static_cast<const uint8_t*>(data);
+    
+    for (uint32_t i = 0; i < width * height; ++i) {
+        rgb_data[i*3 + 0] = src[i*4 + 2]; // R
+        rgb_data[i*3 + 1] = src[i*4 + 1]; // G
+        rgb_data[i*3 + 2] = src[i*4 + 0]; // B
+        // Skip alpha (src[i*4 + 3])
+    }
+
+    return stbi_write_png(png_filename.c_str(), width, height, 3, rgb_data.data(), width * 3);
+}
+
+
 
 }  // namespace
 
@@ -625,6 +658,185 @@ class Engine::Impl {
   void Close() { terminate_ = true; }
 
  private:
+
+    uint32_t FindMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+        VkPhysicalDeviceMemoryProperties memProperties;
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                return i;
+            }
+        }
+
+        throw std::runtime_error("Failed to find suitable memory type!");
+    }
+
+      
+    bool CopyImageToBuffer(vk::Context& context, VkImage srcImage, uint32_t width, uint32_t height) {
+    VkDevice device = context.device();
+
+    // --- 1. Create host-visible buffer ---
+    VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufferInfo.size = width * height * 4; // 4 bytes per pixel (RGBA8)
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkBuffer buffer;
+    if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        
+        printf("Failed to create buffer!\n");
+        return false;
+    }
+
+    // --- 2. Allocate memory for the buffer ---
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
+
+    // Find memory type manually
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(context.physical_device(), &memProperties);
+
+    uint32_t memoryTypeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+        if ((memRequirements.memoryTypeBits & (1 << i)) &&
+            (memProperties.memoryTypes[i].propertyFlags & 
+             (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))) {
+            memoryTypeIndex = i;
+            break;
+        }
+    }
+
+    if (memoryTypeIndex == UINT32_MAX) {
+        
+        printf("Failed to find suitable memory type for buffer!\n");
+        vkDestroyBuffer(device, buffer, nullptr);
+        return false;
+    }
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = memoryTypeIndex;
+
+    VkDeviceMemory bufferMemory;
+    if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+      
+        printf("Failed to allocate buffer memory!\n");
+        vkDestroyBuffer(device, buffer, nullptr);
+        return false;
+    }
+
+    vkBindBufferMemory(device, buffer, bufferMemory, 0);
+
+    // --- 3. Allocate command buffer ---
+    VkCommandBufferAllocateInfo cmdAllocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cmdAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmdAllocInfo.commandPool = context.command_pool();
+    cmdAllocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmdBuffer;
+    vkAllocateCommandBuffers(device, &cmdAllocInfo, &cmdBuffer);
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmdBuffer, &beginInfo);
+
+    // --- 4. Transition image to TRANSFER_SRC layout ---
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = srcImage;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        cmdBuffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    // --- 5. Copy image to buffer ---
+    VkBufferImageCopy copyRegion{};
+    copyRegion.bufferOffset = 0;
+    copyRegion.bufferRowLength = 0; // tightly packed
+    copyRegion.bufferImageHeight = 0;
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.mipLevel = 0;
+    copyRegion.imageSubresource.baseArrayLayer = 0;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageOffset = {0, 0, 0};
+    copyRegion.imageExtent = {width, height, 1};
+
+    vkCmdCopyImageToBuffer(cmdBuffer, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &copyRegion);
+
+    // --- 6. Transition image back to PRESENT layout ---
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+
+    vkCmdPipelineBarrier(
+        cmdBuffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    vkEndCommandBuffer(cmdBuffer);
+
+    // --- 7. Submit command buffer and wait ---
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmdBuffer;
+
+    vkQueueSubmit(context.graphics_queue(), 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(context.graphics_queue());
+
+    // --- 8. Map memory and save image ---
+    void* data;
+    vkMapMemory(device, bufferMemory, 0, bufferInfo.size, 0, &data);
+
+    // Generate filename
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << "screenshot_" << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S") << ".ppm";
+    std::string filename = ss.str();
+
+    bool success = SaveImageToFile(filename, data, width, height, VK_FORMAT_B8G8R8A8_UNORM);
+
+    vkUnmapMemory(device, bufferMemory);
+    vkFreeMemory(device, bufferMemory, nullptr);
+    vkDestroyBuffer(device, buffer, nullptr);
+    vkFreeCommandBuffers(device, context.command_pool(), 1, &cmdBuffer);
+
+   
+    if(!success) {
+        printf("Failed to save image to file!\n");
+    }
+    else {
+        printf("Image saved to %s\n", filename.c_str());
+    }
+
+    return success;
+}
+
+    
+
   void PreparePrimitives() {
     std::vector<uint32_t> splat_index;
     splat_index.reserve(MAX_SPLAT_COUNT * 6);
@@ -764,6 +976,7 @@ class Engine::Impl {
   void Draw() {
     static int sort_interval = 1;
     int32_t frame_index = frame_counter_ % 2;
+    static uint32_t last_image_index_;
     auto& frame_info = frame_infos_[frame_index];
     static float alpha_threshold = 0.1f;
     static float splat_scale = 1.0f;
@@ -1095,6 +1308,25 @@ class Engine::Impl {
       ImGui::SliderFloat("Transparency Threshold", &alpha_threshold, 0.0f, 1.0f, "%.2f");
       ImGui::SliderFloat("Splat Scale", &splat_scale, 0.01f, 5.0f, "%.2f");
 
+
+      //allows taking screenshots of the current frame
+      if (ImGui::Button("Save Screenshot")) {
+        // Get current swapchain image
+        uint32_t image_index = last_image_index_; // Use the last acquired image index
+        //vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &image_index);
+        VkImage currentImage = swapchain_.image(image_index);
+        
+        // Save the image
+        if (CopyImageToBuffer(context_, currentImage, swapchain_.width(), swapchain_.height())) {
+            printf("Screenshot saved to screenshot.png\n");
+            ImGui::Text("Screenshot saved!");
+        } else {
+            printf("Failed to save screenshot\n");
+            ImGui::Text("Failed to save screenshot");
+        }
+      }
+
+
       ImGui::End();
       viewer_.EndUi();
     }
@@ -1123,6 +1355,7 @@ class Engine::Impl {
     }
 
     camera_buffer_[frame_index].projection = camera_.ProjectionMatrix();
+    camera_buffer_[frame_index].projection[1][1] *= -1.f; 
     camera_buffer_[frame_index].view = camera_.ViewMatrix();
     camera_buffer_[frame_index].camera_position = camera_.Eye();
     camera_buffer_[frame_index].screen_size = {camera_.width(), camera_.height()};
@@ -1139,6 +1372,7 @@ class Engine::Impl {
     VkSemaphore image_acquired_semaphore = image_acquired_semaphores_[acquire_index];
     uint32_t image_index;
     if (swapchain_.AcquireNextImage(image_acquired_semaphore, &image_index)) {
+      last_image_index_ = image_index;
       if (!framebuffer_ || swapchain_.width() != framebuffer_.width() || swapchain_.height() != framebuffer_.height()) {
         vkWaitForFences(context_.device(), render_finished_fences_.size(), render_finished_fences_.data(), VK_TRUE,
                         UINT64_MAX);
@@ -1545,6 +1779,7 @@ class Engine::Impl {
       model[0][0] = 10.f;
       model[1][1] = 10.f;
       model[2][2] = 10.f;
+
       vkCmdPushConstants(cb, graphics_pipeline_layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(model), &model);
 
       if (show_axis_) {
