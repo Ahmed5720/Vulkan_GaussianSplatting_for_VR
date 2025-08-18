@@ -1,0 +1,15 @@
+.vscode/
+
+.DS_Store
+
+/src/generated/
+build/
+*.egg-info
+*.cp310-*.pyd
+*.so
+__pycache__
+
+/models/
+
+/imgui.ini
+/pipeline_cache.bin
