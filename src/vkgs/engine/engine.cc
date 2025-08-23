@@ -53,9 +53,12 @@
 #include "stb_image_write.h"
 #include <sstream>
 #include <iomanip>
-
+#include <GLFW/glfw3.h>
 // workaround for Windows OS.
 #undef CreateWindow
+
+//enables testing specifc code. 
+#define ENABLE_TESTING
 
 namespace vkgs {
 namespace {
@@ -93,7 +96,7 @@ struct Resolution {
 
 
 
-
+//push constants for vertex and fragment shaders to change optimization parameters.
 struct CombinedPushConstants {
   glm::mat4 model;
   float alpha_threshold;
@@ -110,6 +113,8 @@ std::vector<Resolution> preset_resolutions = {
     // clang-format on
 };
 
+
+ifdef ENABLE_TESTING
 // saving screenshots for testing
 bool SaveImageToFile(const std::string& filename, const void* data, 
                     uint32_t width, uint32_t height, VkFormat format) {
@@ -134,6 +139,8 @@ bool SaveImageToFile(const std::string& filename, const void* data,
 
     return stbi_write_png(png_filename.c_str(), width, height, 3, rgb_data.data(), width * 3);
 }
+
+#endif
 
 
 
@@ -286,11 +293,6 @@ class Engine::Impl {
       pipeline_layout_info.push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
       pipeline_layout_info.push_constants[0].offset = 0;
       pipeline_layout_info.push_constants[0].size = sizeof(CombinedPushConstants); 
-
-      // pipeline_layout_info.push_constants[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-      // pipeline_layout_info.push_constants[1].offset = sizeof(glm::mat4);
-      // pipeline_layout_info.push_constants[1].size = sizeof(SplatPushConstants);
-
 
       graphics_pipeline_layout_ = vk::PipelineLayout(context_, pipeline_layout_info);
     }
@@ -834,7 +836,63 @@ class Engine::Impl {
 
     return success;
 }
+  //testing 
+  #ifdef ENABLE_TESTING
+  bool ui_visible = true;
+  int test_frame_counter = 0;
+  int current_test_index = 0;
+  bool tests_running = false;
+  const int total_tests = 7 * 7 * 5;
 
+
+  void runAllTests(float &splat_scale, float &alpha_threshold, int &sort_interval, 
+                  const float framerate, bool &screenshot_requested_) {
+      
+      static const float transparency_values[7] = {0.0f, 0.01f, 0.02f, 0.03f, 0.05f, 0.1f, 0.5f};
+      static const float splat_sizes[7] = {1.0f, 0.8f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f};
+      static const int sort_intervals[5] = {1, 2, 3, 4, 5};
+      static int wait_counter = 0;
+      static int test_index = 0;
+      
+      if (test_index >= total_tests) {
+          tests_running = false;
+          test_index = 0;
+          wait_counter = 0;
+          return;
+      }
+      
+      if (wait_counter == 0) {
+          // Set parameters
+          int transparency_idx = test_index / (7 * 5);
+          int splat_size_idx = (test_index / 5) % 7;
+          int sort_interval_idx = test_index % 5;
+          
+          alpha_threshold = transparency_values[transparency_idx];
+          splat_scale = splat_sizes[splat_size_idx];
+          sort_interval = sort_intervals[sort_interval_idx];
+          wait_counter++;
+      }
+      else if (wait_counter < 60) { // Wait 1 second (60 frames)
+          wait_counter++;
+      }
+      else if (wait_counter == 60) {
+          // Capture
+          char buffer[256];
+          snprintf(buffer, sizeof(buffer), "test_%03d_a%.2f_s%.1f_si%d_fps%d.png", 
+                  test_index + 1, alpha_threshold, splat_scale, sort_interval, 
+                  static_cast<int>(framerate));
+          out_name_ = buffer;
+          screenshot_requested_ = true;
+          wait_counter++;
+      }
+      else if (wait_counter == 61) {
+          if (!screenshot_requested_) {
+              test_index++;
+              wait_counter = 0;
+          }
+      }
+    #endif
+  }
     
 
   void PreparePrimitives() {
@@ -997,7 +1055,24 @@ class Engine::Impl {
     static int depth_format = 1;
 
     // draw ui
-    {
+    { 
+      #ifdef ENABLE_TESTING
+      if(screenshot_requested_) {
+        
+        uint32_t image_index = last_image_index_; // Use the last acquired image index
+        VkImage currentImage = swapchain_.image(image_index);
+        
+        // Save the image
+        if (CopyImageToBuffer(context_, currentImage, swapchain_.width(), swapchain_.height())) {
+          printf("Screenshot saved to screenshot.png\n");
+        } else {
+          printf("Failed to save screenshot\n");
+        }
+        screenshot_requested_ = false;
+      }
+      #endif
+
+
       viewer_.BeginUi();
       const auto& io = ImGui::GetIO();
 
@@ -1053,6 +1128,13 @@ class Engine::Impl {
         if (ImGui::IsKeyDown(ImGuiKey::ImGuiMod_Alt) && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
           ToggleDisplayMode();
         }
+
+        #ifdef ENABLE_TESTING
+        if (ImGui::IsKeyPressed(ImGuiKey_F12))
+        {
+          screenshot_requested_ = true;
+        }
+        #endif
       }
 
       if (ImGui::Begin("vkgs")) {
@@ -1308,23 +1390,25 @@ class Engine::Impl {
       ImGui::SliderFloat("Transparency Threshold", &alpha_threshold, 0.0f, 1.0f, "%.2f");
       ImGui::SliderFloat("Splat Scale", &splat_scale, 0.01f, 5.0f, "%.2f");
 
-
+      #ifdef ENABLE_TESTING
       //allows taking screenshots of the current frame
       if (ImGui::Button("Save Screenshot")) {
         // Get current swapchain image
-        uint32_t image_index = last_image_index_; // Use the last acquired image index
-        //vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &image_index);
-        VkImage currentImage = swapchain_.image(image_index);
-        
-        // Save the image
-        if (CopyImageToBuffer(context_, currentImage, swapchain_.width(), swapchain_.height())) {
-            printf("Screenshot saved to screenshot.png\n");
-            ImGui::Text("Screenshot saved!");
-        } else {
-            printf("Failed to save screenshot\n");
-            ImGui::Text("Failed to save screenshot");
-        }
+        screenshot_requested_ = true;
       }
+
+      if (ImGui::Button("Run Tests") || ImGui::IsKeyPressed(ImGuiKey_F5))
+      {
+          tests_running = true;
+          std::cout << "Starting automated tests..." << std::endl;
+      }
+
+      if(tests_running) {
+        
+          runAllTests(splat_scale, alpha_threshold, sort_interval ,io.Framerate, screenshot_requested_);
+      }
+
+      #endif
 
 
       ImGui::End();
@@ -1524,9 +1608,7 @@ class Engine::Impl {
         }
 
         
-        //static uint_64 frame_counter = 0;
-        //frame_counter++;
-        // radix sort
+        
         {
           vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, timestamp_query_pool, 3);
 
@@ -2017,7 +2099,10 @@ class Engine::Impl {
   static constexpr uint32_t timestamp_count_ = 12;
   std::vector<VkQueryPool> timestamp_query_pools_;
 
+  #ifdef ENABLE_TESTING
+  std::string out_name_ = "out.png";
   uint64_t frame_counter_ = 0;
+  #endif
 };
 
 Engine::Engine() : impl_(std::make_shared<Impl>()) {}
