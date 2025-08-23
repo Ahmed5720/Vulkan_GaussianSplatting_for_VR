@@ -19,7 +19,7 @@ void main() {
   // Atomically increment the counter for this pixel
   //uint count = imageAtomicAdd(counter_image, pixel, 1);
 
-  // Set your limit here
+  
   // uint max_splats = 4;
   // if (count >= max_splats)
   // {

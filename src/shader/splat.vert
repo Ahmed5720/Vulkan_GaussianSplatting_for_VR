@@ -4,7 +4,6 @@ layout(std430, set = 1, binding = 1) readonly buffer Instances {
   vec4 instances[];  // (N, 12). 3 for ndc position, 1 padding, 4 for rot scale, 4 for color.
 };
 
-
 layout(push_constant) uniform constants {
     mat4 model;
     float alpha_threshold;
@@ -29,8 +28,10 @@ void main() {
 
   float confidence_radius = 3.f;
   float scale = PushConstants.splat_scale;
-
+  
   gl_Position = vec4(ndc_position + vec3(rot_scale * position * confidence_radius * scale, 0.f), 1.f);
+  //gl_Position.y *= -1.f; // flip y for screen space
   out_color = color;
   out_position = position * confidence_radius * scale;
+  //out_position.y *= -1.f; // flip y for screen space
 }
