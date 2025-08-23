@@ -13,20 +13,17 @@ My goal was to maximize rendering speed without affecting visual quality conside
 
 ---
 
-## 1. Problem Definition and Motivation
+## 1. Problem
 3D Gaussian splatting is a new novel view synthesis technique that has become increasingly popular due to its comparatively better performance than its counterparts such as radiance fields. However, its performance remains suboptimal for resource-limited devices such as VR headsets. These devices offer limited resources and require a high framerate to deliver an acceptable user experience.
 
 ---
 
 ## 2. Bottlenecks
 1. Many fragments are unnecessarily being rendered. Either because the quad on which the gaussian is being projected is too large or because it has a very low alpha value at its edges that is barely visible yet is costly to render.
-2. The sorting step (necessary for correct alpha blending) is very costly. Sorting every frame seems unnecessary as in many cases the changes between each frame are negligible (for a static scene).
-
-   - Sort step has a low L1/L2 hit rate (< 60%). This makes sense as the sorting step is non-cache friendly and the Jetson’s Ampere GPU has limited memory (128KB L1, 512KB L2).
-
-
+![unnessicary fragment rendering](media/gs.png)  
+3. The sorting step (necessary for correct alpha blending) is very costly. Sorting every frame seems unnecessary as in many cases the changes between each frame are negligible (for a static scene).
 ![Captured from Nsight Graphics’s Trace Profiler on the Jetson Orin.](media/l2lowcache.png)
-
+  - Sort step has a low L1/L2 hit rate (< 60%). This makes sense as the sorting step is non-cache friendly and the Jetson’s Ampere GPU has limited memory (128KB L1, 512KB L2).   
 
 ---
 
@@ -34,18 +31,22 @@ My goal was to maximize rendering speed without affecting visual quality conside
 We perform three different optimizations:
 - **A.** Discard fragments below a fixed threshold in the fragment shader.  
 - **B.** Scale down the quad until it closely borders the splat.  
-- **C.** Sort every *n-th* frame instead of each frame.  
+- **C.** Sort every *n-th* frame instead of each frame.
+  ![optimizations](media/gsopt.png)  
 
 ---
 
 ## 4. Method & Results
 We captured 245 different frames. For each frame we varied three parameters (splat scale, alpha threshold, sorting interval). We then measured their PSNR against the base frame (when none of the parameters are changed). Note that the base frame is not actually ground truth.
 
-The **Pareto frontier** (in red) shows us the optimal images (with their parameter values). The image below is the frame at the center of the red line with settings:
+
+![The **Pareto frontier** (in red) shows us the optimal images (with their parameter values).](media\finale.png) The image below is the frame at the center of the red line with settings:
 - `alpha_thres = 0.02`  
 - `splat_scale = 0.6`  
 - `sort_interval = 5`  
 
+
+![Comparison between Vanilla Vulkan implementation and our modified renderer](media/comp.png)
 *Note: These tests were conducted on PC for speed. Results will be reproduced on Jetson Orin.*
 
 ---
