@@ -40,7 +40,7 @@ We perform three different optimizations:
 We captured 245 different frames. For each frame we varied three parameters (splat scale, alpha threshold, sorting interval). We then measured their PSNR against the base frame (when none of the parameters are changed). Note that the base frame is not actually ground truth.
 
 
-![The **Pareto frontier** (in red) shows us the optimal images (with their parameter values).](media\finale.png) The image below is the frame at the center of the red line with settings:
+![The **Pareto frontier** (in red) shows us the optimal images (with their parameter values).](media/finale.png) The image below is the frame at the center of the red line with settings:
 - `alpha_thres = 0.02`  
 - `splat_scale = 0.6`  
 - `sort_interval = 5`  
