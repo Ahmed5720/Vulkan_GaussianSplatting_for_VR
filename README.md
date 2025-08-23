@@ -1,45 +1,65 @@
-# vkgs
-
-Gaussian splatting viewer written in Vulkan.
-
-The main goal of this project is to maximize rendering speed.
-
-For more details, refer to [details](DETAILS.md).
+## Profiling and Optimizing 3D Gaussian Splatting on Low Powered Edge Devices
+**Author:** Ahmed Nassar  
 
 
-## Notes
+#Notes
 
-Currently I am **not actively maintaining** this project, but I am still open to suggestions or discussions, and will be happy to answer any questions or make quick fixes. Please open github issues about anything. Job offer is also welcome ;)
-
-Consider using [vk_gaussian_splatting](https://github.com/nvpro-samples/vk_gaussian_splatting), another Vulkan 3DGS renderer by NVidia with richer functionalities.
-They mentioned my project (which is a great honor for me), and obviously their codes are far more well-organized.
-
-Also, check out [vulkan_radix_sort](https://github.com/jaesung-cs/vulkan_radix_sort).
-It has a way better user-friendly interface that can be easily used by other projects.
-It is adopted by the NVidia sample, implying that the sort algorithm is quite stable.
+This project is based on the great vulkan implementation by @jaesung-cs. Here, I have only tried to optimize it further. please refer to their original repo for build instructions, dependencies, and requirements at https://github.com/jaesung-cs/vkgs
+My goal was to maximize rendering speed without affecting visual quality considerably.
 
 
-## Desktop Viewer
-
-![](/media/screenshot-fast2.jpg)
-
-Viewer works with pre-trained vanilla 3DGS models as input.
 
 
-### Feature Highlights
 
-- Fast rendering speed
-  - 350+ FPS on 1600x900, high-end GPU (NVidia GeForce RTX 4090)
-  - 50+ FPS on 1600x900, high-end MacOS laptop (Apple M2 Pro)
-  - 1-1.5x speed compared to SIBR viewer, but difference becomes bigger when scene is zoomed out,
-    - because the number of tiles increases, and
-    - more splats overlap in a single tile, so sequential blending operation takes more time
-- Using graphics pipeline
-  - Draw gaussian splats over other opaque objects, interacting with depth buffer
-- 100% GPU tasks
-  - No CPU-GPU synchronization for single frame: while GPU is working on frame i, CPU prepares a commands buffer and submits for frame i+1. No synchronization for frame i to get number of visible splats.
-  - Indirect sort & draw: sorting and rendering only visible points
-  - My vulkan radix sort implementation
+---
+
+## 1. Problem Definition and Motivation
+3D Gaussian splatting is a new novel view synthesis technique that has become increasingly popular due to its comparatively better performance than its counterparts such as radiance fields. However, its performance remains suboptimal for resource-limited devices such as VR headsets. These devices offer limited resources and require a high framerate to deliver an acceptable user experience.
+
+---
+
+## 2. Bottlenecks
+1. Many fragments are unnecessarily being rendered. Either because the quad on which the gaussian is being projected is too large or because it has a very low alpha value at its edges that is barely visible yet is costly to render.
+2. The sorting step (necessary for correct alpha blending) is very costly. Sorting every frame seems unnecessary as in many cases the changes between each frame are negligible (for a static scene).
+
+   - Sort step has a low L1/L2 hit rate (< 60%). This makes sense as the sorting step is non-cache friendly and the Jetson’s Ampere GPU has limited memory (128KB L1, 512KB L2).
+
+Captured from Nsight Graphics’s Trace Profiler on the Jetson Orin.
+
+---
+
+## 3. Solution
+We perform three different optimizations:
+- **A.** Discard fragments below a fixed threshold in the fragment shader.  
+- **B.** Scale down the quad until it closely borders the splat.  
+- **C.** Sort every *n-th* frame instead of each frame.  
+
+---
+
+## 4. Method & Results
+We captured 245 different frames. For each frame we varied three parameters (splat scale, alpha threshold, sorting interval). We then measured their PSNR against the base frame (when none of the parameters are changed). Note that the base frame is not actually ground truth.
+
+The **Pareto frontier** (in red) shows us the optimal images (with their parameter values). The image below is the frame at the center of the red line with settings:
+- `alpha_thres = 0.02`  
+- `splat_scale = 0.6`  
+- `sort_interval = 5`  
+
+*Note: These tests were conducted on PC for speed. Results will be reproduced on Jetson Orin.*
+
+---
+
+## 5. Future Work
+- **Dynamic Sorting Scheduler:** Sort more frequently when there is quicker change in scenery. For example, calculate a motion vector for the camera and sort more aggressively when velocity is high, and less when motion is small.  
+- **Cache Friendly Radix Sort:** Instead of sorting each frame from scratch, cache partial steps of GPU radix sort across consecutive frames to improve cache hit rate.  
+- **DLSS Frame Generation:** Explore integrating NVIDIA DLSS for frame generation.  
+
+---
+
+## 6. References
+Kerbl, B., Kopanas, G., Leimkühler, T., & Drettakis, G. (2023). *3D Gaussian Splatting for Real-Time Radiance Field Rendering*. ACM Transactions on Graphics, **42**(4).  
+[Project Page](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
+
+
 
 
 ### Requirements
@@ -90,40 +110,15 @@ Drag and drop pretrained .ply file from [official gaussian splatting](https://gi
 - Ctrl+wheel to change FOV.
 
 
-## pygs: Python Binding (WIP)
 
-GUI is created in an off thread.
-According to GLFW documentation, the user should create window in main thread.
-However, managing windows off-thread seems working in Windows and Linux somehow.
-
-Unfortunately, MacOS doesn't allow this.
-MacOS’s UI frameworks can only be called from the main thread.
-Here's a related [thread](https://forums.developer.apple.com/forums/thread/659010) by Apple staff.
-
-
-### Requirements
-
-- Windows or Linux (Doesn't work for MacOS.)
-- conda: cmake, pybind11, cuda-toolkit (cuda WIP, not necessary yet)
-```bash
-$ conda create -n pygs python=3.10
-$ conda activate pygs
-$ conda install conda-forge::cmake
-$ conda install conda-forge::pybind11
-$ conda install nvidia/label/cuda-12.2.2::cuda-toolkit  # or any other version
-```
 
 
 ### Build
 
-The python package dynamically links to c++ shared library file.
-
-So, first build the shared library first, then install python package.
 
 ```bash
 $ cmake . -B build
 $ cmake --build build --config Release -j
-$ pip install -e binding/python
 ```
 
 
