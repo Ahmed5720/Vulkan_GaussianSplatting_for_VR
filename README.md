@@ -25,7 +25,7 @@ My goal was to maximize rendering speed without affecting visual quality conside
    - Sort step has a low L1/L2 hit rate (< 60%). This makes sense as the sorting step is non-cache friendly and the Jetson’s Ampere GPU has limited memory (128KB L1, 512KB L2).
 
 
-![Captured from Nsight Graphics’s Trace Profiler on the Jetson Orin.](media/l2lowcache (2).png)
+![Captured from Nsight Graphics’s Trace Profiler on the Jetson Orin.](media/l2lowcache(2).png)
 
 
 ---
