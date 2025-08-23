@@ -64,6 +64,7 @@ Kerbl, B., Kopanas, G., Leimkühler, T., & Drettakis, G. (2023). *3D Gaussian Sp
 
 
 
+## the following is copied from the original repositoy by cs-jaesung
 
 ### Requirements
 - `VulkanSDK>=1.3.296.0`
@@ -115,17 +116,14 @@ Drag and drop pretrained .ply file from [official gaussian splatting](https://gi
 
 
 
-
-### Build
-
-
-```bash
-$ cmake . -B build
-$ cmake --build build --config Release -j
-```
-
-
 ### Test
+
+![UI testing parameters](media/test_ui.png)
+You can either test manually through the parameters in the UI which allows you to play with the settings in real time. Or you could perform the automated testings to find the best parameter settings.
+Note that since the testing is purely testing fps/psnr of each frame, we preform the comparisons from a fixed point of view. you can set the camera at whatever pose you like then hit F12 to begin automated testing or press the UI button.
+I have also added buttons in the interface to copy and paste a camera's viewpoint (location and rotation). So you can save the viewport across different runs.
+
+To perform automated tests. first, run your scene. fix the camera somewhere, then hit F12. this will save multiple frames into the runs folder. ones the frames are saved. you can run the psnr_calculator script to perform the tests and generate a CSV file containing different parameter values and their respective FPS/PSNR's. 
 
 ```bash
 $ python
@@ -135,3 +133,5 @@ $ python
 >>> pygs.load("./models/garden_30000.ply")
 >>> pygs.close()
 ```
+
+Note** the testing code is at Engine.cc. under the preprocessor definition ENABLE_TESTING. So you can enable and disable it as you see fit.
