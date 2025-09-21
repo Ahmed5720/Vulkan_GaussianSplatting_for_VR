@@ -2,7 +2,7 @@
 **Author:** Ahmed Nassar  
 
 
-#Notes
+#Notes:
 
 This project is based on the great vulkan implementation by @jaesung-cs. Here, I have only tried to optimize it further. please refer to their original repo for build instructions, dependencies, and requirements at https://github.com/jaesung-cs/vkgs
 My goal was to maximize rendering speed without affecting visual quality considerably.
